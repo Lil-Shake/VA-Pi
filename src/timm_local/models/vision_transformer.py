@@ -50,6 +50,8 @@ from ._manipulate import named_apply, checkpoint_seq, adapt_input_conv
 from ._registry import generate_default_cfgs, register_model, register_model_deprecations
 
 from tokenizer.vq_model import VQ_models
+from tokenizer.ibq_modules.ibqgan import load_vq_gan
+from omegaconf import OmegaConf
 import os
 import urllib.request
 
@@ -537,6 +539,9 @@ class VisionTransformer(nn.Module):
         self.dynamic_img_size = dynamic_img_size
         self.grad_checkpointing = False
 
+        # image size 512 use ibq as vq model
+        self.ibq = True if img_size[0] == 512 else False
+
         embed_args = {}
         if dynamic_img_size:
             # flatten deferred until after pos embed
@@ -615,35 +620,59 @@ class VisionTransformer(nn.Module):
             self.fix_init_weight()
 
         # create and load vq model
-        self.vq = VQ_models[vq_model](
-            codebook_size=codebook_size,
-            codebook_embed_dim=codebook_embed_dim)
-        
-        # download vq model
-        vq_ckpt_path = "./tokenizer/pretrained_models/"
-        vq_ckpt_file = "vq_ds16_t2i.pt"
-        vq_ckpt = os.path.join(vq_ckpt_path, vq_ckpt_file)
-        
-        if not os.path.exists(vq_ckpt_path):
-            os.makedirs(vq_ckpt_path)
+        if not self.ibq:
+            self.vq = VQ_models[vq_model](
+                codebook_size=codebook_size,
+                codebook_embed_dim=codebook_embed_dim)
+            
+            # download vq model
+            vq_ckpt_path = "./tokenizer/pretrained_models/"
+            vq_ckpt_file = "vq_ds16_t2i.pt"
+            vq_ckpt = os.path.join(vq_ckpt_path, vq_ckpt_file)
+            
+            if not os.path.exists(vq_ckpt_path):
+                os.makedirs(vq_ckpt_path)
 
-        if not os.path.exists(vq_ckpt):
-            print(f"Downloading {vq_ckpt_file}...")
-            urllib.request.urlretrieve("https://huggingface.co/peizesun/llamagen_t2i/resolve/main/vq_ds16_t2i.pt", vq_ckpt)
-            print(f"{vq_ckpt_file} downloaded successfully.")
+            if not os.path.exists(vq_ckpt):
+                print(f"Downloading {vq_ckpt_file}...")
+                urllib.request.urlretrieve("https://huggingface.co/peizesun/llamagen_t2i/resolve/main/vq_ds16_t2i.pt", vq_ckpt)
+                print(f"{vq_ckpt_file} downloaded successfully.")
 
-        vq_checkpoint = torch.load(vq_ckpt, map_location="cpu")
-        if "ema" in vq_checkpoint:  # ema
-            vq_model_weight = vq_checkpoint["ema"]
-        elif "model" in vq_checkpoint:  # ddp
-            vq_model_weight = vq_checkpoint["model"]
-        elif "state_dict" in vq_checkpoint:
-            vq_model_weight = vq_checkpoint["state_dict"]
+            vq_checkpoint = torch.load(vq_ckpt, map_location="cpu")
+            if "ema" in vq_checkpoint:  # ema
+                vq_model_weight = vq_checkpoint["ema"]
+            elif "model" in vq_checkpoint:  # ddp
+                vq_model_weight = vq_checkpoint["model"]
+            elif "state_dict" in vq_checkpoint:
+                vq_model_weight = vq_checkpoint["state_dict"]
+            else:
+                raise Exception("please check model weight")
+            self.vq.load_state_dict(vq_model_weight)
+            del vq_checkpoint
+            print("vq model loaded with LlamaGen")
+            
         else:
-            raise Exception("please check model weight")
-        self.vq.load_state_dict(vq_model_weight)
-        del vq_checkpoint
-        print("vq model loaded")
+            # load ibq model
+            codebook_embed_dim = 256
+            yaml_path = './tokenizer/ibq_modules/ibq_config.yaml'
+            config = OmegaConf.load(yaml_path)
+
+            # download ibq model
+            vq_ckpt = config.ckpt_path
+            vq_ckpt_file = os.path.basename(vq_ckpt)
+            vq_ckpt_path = os.path.dirname(vq_ckpt)
+            if not os.path.exists(vq_ckpt_path):
+                os.makedirs(vq_ckpt_path)
+
+            if not os.path.exists(vq_ckpt):
+                print(f"Downloading {vq_ckpt_file}...")
+                urllib.request.urlretrieve("https://huggingface.co/TencentARC/IBQ-Tokenizer-262144/resolve/main/imagenet256_262144.ckpt", vq_ckpt)
+                print(f"{vq_ckpt_file} downloaded successfully.")
+
+            self.vq = load_vq_gan(config)
+            print("vq model loaded with IBQ")
+
+        # freeze vq model
         self.lock_vq()
 
         # mlp mapping
@@ -2100,6 +2129,10 @@ default_cfgs = {
         hf_hub_id='timm/',
         input_size=(3, 512, 512),
         num_classes=0),
+    'vit_so400m_patch16_toklip_512.v2_webli': _cfg(
+        hf_hub_id='timm/',
+        input_size=(3, 512, 512),
+        num_classes=0),
     'vit_giantopt_patch16_siglip_256.v2_webli': _cfg(
         hf_hub_id='timm/',
         input_size=(3, 256, 256),
@@ -3537,6 +3570,17 @@ def vit_so400m_patch16_siglip_512(pretrained: bool = False, **kwargs) -> VisionT
     )
     model = _create_vision_transformer(
         'vit_so400m_patch16_siglip_512', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+# vit_so400m_patch16_toklip_512
+@register_model
+def vit_so400m_patch16_toklip_512(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    model_args = dict(
+        patch_size=16, embed_dim=1152, depth=27, num_heads=16, mlp_ratio=3.7362, class_token=False, global_pool='map',
+        act_layer='gelu_tanh',
+    )
+    model = _create_vision_transformer(
+        'vit_so400m_patch16_toklip_512', pretrained=pretrained, **dict(model_args, **kwargs))
     return model
 
 # multiresolution models

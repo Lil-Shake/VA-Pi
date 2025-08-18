@@ -1,0 +1,41 @@
+model:
+  init_args:
+    ddconfig:
+      double_z: False
+      z_channels: 256
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,1,2,2,4]  # num_down = len(ch_mult)-1
+      num_res_blocks: 4 #not adopt from showo
+      attn_resolutions: [16] #not adopt from showo
+      dropout: 0.0
+
+    lossconfig:
+      # target: src.IBQ.modules.losses.vqperceptual.VQLPIPSWithDiscriminator
+      disc_conditional: False
+      disc_in_channels: 3
+      disc_start: 0 # from 0 epoch
+
+      disc_weight: 0.4 # default 0.4
+      quant_loss_weight: 1.0 # default 1.0
+      entropy_loss_weight: 0.05 # default 0.1
+      gen_loss_weight: 0.1
+      lecam_loss_weight: 0.05
+
+    # n_embed: 16384
+    n_embed: 262144
+    embed_dim: 256
+    learning_rate: 1e-4
+    l2_normalize: False
+    use_entropy_loss: True
+    sample_minimization_weight: 1.0
+    batch_maximization_weight: 1.0
+    entropy_temperature: 0.01 # default 0.01
+    beta: 0.25
+    use_ema: True
+    resume_lr:
+    lr_drop_epoch: [250, 300]
+
+ckpt_path: ./tokenizer/pretrained_models/IBQ_pretrain_262144.ckpt

@@ -12,10 +12,12 @@
 
 Welcome to the official code repository for "[**TokLIP: Marry Visual Tokens to CLIP for Multimodal Comprehension and Generation**](https://arxiv.org/abs/2505.05422)".
 
-Your star means a lot for us to develop this project! ⭐⭐⭐
+Your star means a lot to us in developing this project! ⭐⭐⭐
 
 
 ## 📰 News
+* [2025/08/18] 🚀 Check our latest results on arXiv ([PDF](https://arxiv.org/pdf/2505.05422))!
+* [2025/08/18] 🔥 We release TokLIP XL with 512 resolution [🤗 TokLIP_XL_512](https://huggingface.co/TencentARC/TokLIP/blob/main/TokLIP_XL_512.pt)!
 * [2025/08/05] 🔥 We release the training code!
 * [2025/06/05] 🔥 We release the code and models!
 * [2025/05/09] 🚀 Our paper is available on arXiv!
@@ -46,12 +48,11 @@ pip install -r requirements.txt
 
 ### Model Weight
 
-|  Model   | Resolution | IN Top1 | COCO TR@1 | COCO IR@1 |                            Weight                            |
-| :------: | :--------: | :-----: | :-------: | :-------: | :----------------------------------------------------------: |
-| TokLIP-S |    256     |  76.4   |   64.06   |   48.46   | [🤗 TokLIP_S_256](https://huggingface.co/TencentARC/TokLIP/blob/main/TokLIP_S_256.pt) |
-| TokLIP-L |    384     |  80.0   |   68.00   |   52.87   | [🤗 TokLIP_L_384](https://huggingface.co/TencentARC/TokLIP/blob/main/TokLIP_L_384.pt) |
-
-TokLIP-XL with 512x512 resolution will be released soon!
+|   Model   | Resolution |                            VQGAN                             | IN Top1 | COCO TR@1 | COCO IR@1 |                            Weight                            |
+| :-------: | :--------: | :----------------------------------------------------------: | :-----: | :-------: | :-------: | :----------------------------------------------------------: |
+| TokLIP-S  |    256     | [LlamaGen](https://huggingface.co/peizesun/llamagen_t2i/blob/main/vq_ds16_t2i.pt) |  76.4   |   64.06   |   48.46   | [🤗 TokLIP_S_256](https://huggingface.co/TencentARC/TokLIP/blob/main/TokLIP_S_256.pt) |
+| TokLIP-L  |    384     | [LlamaGen](https://huggingface.co/peizesun/llamagen_t2i/blob/main/vq_ds16_t2i.pt) |  80.0   |   68.00   |   52.87   | [🤗 TokLIP_L_384](https://huggingface.co/TencentARC/TokLIP/blob/main/TokLIP_L_384.pt) |
+| TokLIP-XL |    512     | [IBQ](https://huggingface.co/TencentARC/IBQ-Tokenizer-262144/blob/main/imagenet256_262144.ckpt) |  80.8   |   69.40   |   53.77   | [🤗 TokLIP_XL_512](https://huggingface.co/TencentARC/TokLIP/blob/main/TokLIP_XL_512.pt) |
 
 
 ### Training
@@ -71,7 +72,7 @@ TokLIP-XL with 512x512 resolution will be released soon!
 
 Please first download the TokLIP model weights.
 
-We provide the evalution scripts for ImageNet classification  and MSCOCO Retrieval in `src\test_toklip_256.sh` and `src\test_toklip_384.sh`. 
+We provide the evaluation scripts for ImageNet classification and MSCOCO Retrieval in `src\test_toklip_256.sh`, `src\test_toklip_384.sh`, and `src\test_toklip_512.sh`. 
 
 Please revise the `--pretrained`, `--imagenet-val`, and `--coco-dir` with your specific paths.
 
@@ -86,12 +87,12 @@ python inference.py --model-config 'ViT-SO400M-16-SigLIP2-384-toklip' --pretrain
 
 ### Model Usage
 
-We provide `build_toklip_encoder` function in `src/create_toklip.py`, you could direct load TokLIP with `model`, `image_size`, and `model_path` parameters.
+We provide `build_toklip_encoder` function in `src/create_toklip.py`, you could directly load TokLIP with `model`, `image_size`, and `model_path` parameters.
 
 
 ## 🔜 TODOs
 - [x] Release training codes.
-- [ ] Release TokLIP-XL with 512 resolution.
+- [x] Release TokLIP-XL with 512 resolution.
 
 
 ## 📂 Contact
@@ -101,11 +102,12 @@ Discussions and potential collaborations are also welcome.
 
 
 ## 🙏 Acknowledgement
-This repo is build upon the following projects:
+This repo is built upon the following projects:
 
 * [OpenCLIP](https://github.com/mlfoundations/open_clip)
 * [LlamaGen](https://github.com/FoundationVision/LlamaGen)
 * [DeCLIP](https://github.com/Sense-GVT/DeCLIP)
+* [SEED-Voken](https://github.com/TencentARC/SEED-Voken)
 
 We thank the authors for their codes.
 
@@ -114,7 +116,7 @@ We thank the authors for their codes.
 Please cite our work if you use our code or discuss our findings in your own research:
 ```bibtex
 @article{lin2025toklip,
-  title={TokLIP: Marry Visual Tokens to CLIP for Multimodal Comprehension and Generation},
+  title={Toklip: Marry visual tokens to clip for multimodal comprehension and generation},
   author={Lin, Haokun and Wang, Teng and Ge, Yixiao and Ge, Yuying and Lu, Zhichao and Wei, Ying and Zhang, Qingfu and Sun, Zhenan and Shan, Ying},
   journal={arXiv preprint arXiv:2505.05422},
   year={2025}
