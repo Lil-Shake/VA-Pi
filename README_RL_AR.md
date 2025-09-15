@@ -1,16 +1,16 @@
-RL fine-tuning for Autoregressive (AR) code models (TokLIP tokenizers)
+# RL fine-tuning for Autoregressive (AR) code models (TokLIP tokenizers)
 
-Context
+## Context
 - Goal: reduce the train-test gap between teacher-forcing training and autoregressive decoding by fine-tuning a GPT-like AR policy directly on the tokens that decode well through the (frozen) tokenizer/decoder.
 - Reward: image-domain losses between the input image and the reconstruction obtained by decoding the sampled token sequence. E.g., reconstruction L2/L1, PSNR, SSIM, LPIPS (perceptual), etc. The policy is optimized to minimize reconstruction/perceptual loss (i.e., maximize negative loss as reward).
 
-High-level Pipeline
+## High-level Pipeline
 1) Frozen tokenizer: Use the existing IBQ/VQ tokenizer/decoder from `src/tokenizer/ibq_modules/ibqgan.py`. Do not update its parameters.
 2) AR policy: Use `src/tokenizer/ibq_modules/transformer/mingpt.py::GPT` as the autoregressive policy over codebook indices.
 3) Rollout: For each image, start from a condition (e.g., class token or an empty prefix), sample a full token sequence with the policy, decode it to an image via the frozen decoder, compute reward = -reconstruction_loss(input, decoded).
 4) Optimize: Use REINFORCE or PPO to update the policy with advantages derived from rewards. Minimal viable route starts with REINFORCE.
 
-Minimal Code Structure (new module)
+## Minimal Code Structure (new module)
 - New package: `src/rl_ar_finetune/`
   - `builder.py`: builders for frozen tokenizer and GPT policy.
   - `sampling.py`: autoregressive sampling that also returns per-step log-probs.
@@ -18,7 +18,7 @@ Minimal Code Structure (new module)
   - `optimize.py`: REINFORCE/PPO update steps with standardization of advantages.
   - `train_loop.py`: end-to-end training loop composing the above pieces.
 
-Key APIs (summary)
+## Key APIs (summary)
 - build_toklip_tokenizer(init_args, ckpt_path=None, device=None) -> FrozenTokenizer
   - Build the TokLIP tokenizer (IBQ/VQ) and wrap it frozen: exposes encode(images)->indices; decode_code(indices)->images; codebook_size.
   - If you already have a loaded IBQ/VQ model instance, use `build_tokenizer_frozen(vq_model)` instead.
@@ -36,25 +36,15 @@ Key APIs (summary)
 - train_rl_loop(cfg)
   - Orchestrates data loading, rollout, reward, and optimization, with logging and checkpointing.
 
-Assumptions and Shapes
+## Assumptions and Shapes
 - Token sequences: LongTensor [batch, seq_len], values in [0, vocab_size-1].
 - Start tokens: may include a class token via LabelEmbedder in GPT; pass as a tuple (idx, idx_cls) if used.
 - Rewards: scalar per example; for simplicity, broadcast to all steps in that sequence during REINFORCE.
 
-How to Extend
-- PPO: add old_logprobs buffer, compute ratios and clipped surrogate loss; optionally add value head for GAE.
-- Conditional generation: add text features or other conditioning by concatenating condition tokens or adding cross-attention to GPT.
-- Mixed rewards: combine reconstruction and perceptual scores with weights.
-
-Safety / Performance Notes
-- Decode in small batches to control VRAM.
-- Use AMP where safe for reward networks (e.g., LPIPS), but keep tokenizer decoder numerically stable.
-- Clip gradients on the policy.
-
-Entry Point
+## Entry Point
 - Define a small script (or notebook) to import `train_rl_loop(cfg)` from `src/rl_ar_finetune/train_loop.py` and pass dataset + hyperparameters.
 
-Example: Using TokLIP Tokenizer + GPT or LlamaGen AR
+## Example: Using TokLIP Tokenizer + GPT or LlamaGen AR
 ```python
 from rl_ar_finetune.builder import build_toklip_tokenizer, build_ar_policy
 from rl_ar_finetune.train_loop import train_rl_loop
