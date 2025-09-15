@@ -1,4 +1,4 @@
-# RL fine-tuning for Autoregressive (AR) code models (TokLIP tokenizers)
+# RL fine-tuning for Autoregressive (AR) models (TokLIP tokenizers)
 
 ## Context
 - Goal: reduce the train-test gap between teacher-forcing training and autoregressive decoding by fine-tuning a GPT-like AR policy directly on the tokens that decode well through the (frozen) tokenizer/decoder.
