@@ -46,6 +46,7 @@ VQ_MODEL_PATH="/mnt/petrelfs/share_data/quxiaoye/models/LlamaGen/vq_ds16_c2i.pt"
 # 可选：GPT 预训练初始化（留空则不加载）
 GPT_INIT_CKPT="/mnt/petrelfs/share_data/quxiaoye/models/LlamaGen/c2i_XXL_384.pt"
 DATA_PATH="/mnt/petrelfs/share_data/quxiaoye/imagenet1k-ds"
+CKP_PATH=""
 
 # -------------------------
 # Python import 路径（确保绝对 import 生效）
@@ -74,11 +75,16 @@ srun torchrun \
     --gpt-model GPT-XXL $EXTRA_GPT_FLAGS \
     --sample-batch-size 16 \
     --train-batch-size 8 \
+    --gradient-accumulation-steps 16 \
     --num-generations 8 \
     --temperature 1.0 --top-k 0 --top-p 1.0 \
-    --epochs 100 \
+    --epochs 60 \
+    --ckpt-every 60 \
     --lr 1e-5 --weight-decay 1e-4 --beta1 0.9 --beta2 0.999 \
-    --max-grad-norm 1.0 --clip-range 1e-4 --adv-clip-max 5.0 \
+    --max-grad-norm 1.0 --clip-range 0.2 --adv-clip-max 5.0 \
     --mixed-precision bf16 --data-parallel fsdp \
-    --use-wandb --wandb-project autoreg-grpo --wandb-entity ${WANDB_ENTITY:-none} --wandb-run-name ${WANDB_RUN_NAME:-c2i-grpo-8gpu} \
+    --reward-rec-weight 1.0 \
+    --reward-perceptual-weight 1.0 \
+    --aux-ce-weight 0.07 \
+    --use-wandb --wandb-project autoreg-grpo --wandb-entity ${WANDB_ENTITY:-none} --wandb-run-name "c2i-grpo" \
     "$@"
