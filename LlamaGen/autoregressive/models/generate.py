@@ -112,8 +112,14 @@ def decode_n_tokens(
         with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True): # Actually better for Inductor to codegen attention here
             if cfg_interval > -1 and i > cfg_interval:
                 cfg_flag = False
+            if "cfg_type" in sampling_kwargs and sampling_kwargs["cfg_type"] == "power-cosine":
+                assert "cfg_power" in sampling_kwargs
+                scale_pow = sampling_kwargs["cfg_power"]
+                scale_step = (1 - torch.cos(
+                ((i / num_new_tokens) ** scale_pow) * torch.pi)) * 1/2
+                cur_cfg_scale = 1.0 + scale_step * (cfg_scale - 1.0)
             next_token, next_prob = decode_one_token(
-                model, cur_token, input_pos, cfg_scale, cfg_flag, **sampling_kwargs
+                model, cur_token, input_pos, cur_cfg_scale, cfg_flag, **sampling_kwargs
             )
             input_pos += 1
             new_tokens.append(next_token.clone())

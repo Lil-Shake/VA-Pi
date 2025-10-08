@@ -123,7 +123,7 @@ def main(args):
         ckpt_string_name = os.path.basename(args.gpt_ckpt).replace(".pth", "").replace(".pt", "")
     folder_name = f"{model_string_name}-{ckpt_string_name}-sample-size-{args.image_size}-eval-size-{args.image_size_eval}-{args.vq_model}-" \
                   f"topk-{args.top_k}-topp-{args.top_p}-temperature-{args.temperature}-" \
-                  f"cfg-{args.cfg_scale}-seed-{args.global_seed}"
+                  f"cfg-{args.cfg_scale}-cfg_type-{args.cfg_type}-cfg_power-{args.cfg_power}-seed-{args.global_seed}"
     sample_folder_dir = f"{args.sample_dir}/{folder_name}"
     if rank == 0:
         os.makedirs(sample_folder_dir, exist_ok=True)
@@ -154,6 +154,7 @@ def main(args):
             cfg_scale=args.cfg_scale, cfg_interval=args.cfg_interval,
             temperature=args.temperature, top_k=args.top_k,
             top_p=args.top_p, sample_logits=True, 
+            cfg_type=args.cfg_type, cfg_power=args.cfg_power
             )
         
         samples = vq_model.decode_code(index_sample, qzshape) # output value is between [-1, 1]
@@ -209,5 +210,7 @@ if __name__ == "__main__":
     parser.add_argument("--top-k", type=int, default=0,help="top-k value to sample with")
     parser.add_argument("--temperature", type=float, default=1.0, help="temperature value to sample with")
     parser.add_argument("--top-p", type=float, default=1.0, help="top-p value to sample with")
+    parser.add_argument("--cfg_type", type=str, default="constant", choices=["constant", "power-cosine"])
+    parser.add_argument("--cfg_power", type=float, default=2.0)
     args = parser.parse_args()
     main(args)
