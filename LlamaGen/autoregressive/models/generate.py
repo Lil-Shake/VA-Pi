@@ -7,6 +7,7 @@ from torch.nn import functional as F
 import torch._dynamo.config
 import torch._inductor.config
 import copy
+import math
 # torch._inductor.config.coordinate_descent_tuning = True
 # torch._inductor.config.triton.unique_kernel_names = True
 # torch._inductor.config.fx_graph_cache = True # Experimental feature to reduce compilation times, will be on by default in future
@@ -54,7 +55,7 @@ def top_k_top_p_filtering(
     return logits
 
 
-def sample(logits, temperature: float=1.0, top_k: int=0, top_p: float=1.0, sample_logits=True):        
+def sample(logits, temperature: float=1.0, top_k: int=0, top_p: float=1.0, sample_logits=True, **kwargs):        
     logits = logits[:, -1, :] / max(temperature, 1e-5)
     if top_k > 0 or top_p < 1.0:
         logits = top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
@@ -88,12 +89,15 @@ def prefill(model, cond_idx: torch.Tensor, input_pos: torch.Tensor, cfg_scale: f
 
 def decode_one_token(model, x: torch.Tensor, input_pos: torch.Tensor, cfg_scale: float, cfg_flag: bool, **sampling_kwargs):
     assert input_pos.shape[-1] == 1
-    if cfg_scale > 1.0:
+    # If CFG caches were initialized (batch doubled), we must always feed doubled queries
+    need_dup = cfg_scale > 1.0 or (
+        hasattr(model, "max_batch_size") and model.max_batch_size == x.shape[0] * 2
+    )
+    if need_dup:
         x_combined = torch.cat([x, x])
         logits, _ = model(x_combined, cond_idx=None, input_pos=input_pos)
-        logits_combined = logits
-        cond_logits, uncond_logits = torch.split(logits_combined, len(logits_combined) // 2, dim=0) 
-        if cfg_flag:
+        cond_logits, uncond_logits = torch.split(logits, logits.shape[0] // 2, dim=0)
+        if cfg_scale > 1.0 and cfg_flag:
             logits = uncond_logits + (cond_logits - uncond_logits) * cfg_scale
         else:
             logits = cond_logits
@@ -112,11 +116,12 @@ def decode_n_tokens(
         with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True): # Actually better for Inductor to codegen attention here
             if cfg_interval > -1 and i > cfg_interval:
                 cfg_flag = False
+            cur_cfg_scale = cfg_scale
             if "cfg_type" in sampling_kwargs and sampling_kwargs["cfg_type"] == "power-cosine":
                 assert "cfg_power" in sampling_kwargs
                 scale_pow = sampling_kwargs["cfg_power"]
-                scale_step = (1 - torch.cos(
-                ((i / num_new_tokens) ** scale_pow) * torch.pi)) * 1/2
+                t = (i / num_new_tokens) ** scale_pow
+                scale_step = (1 - math.cos(t * math.pi)) * 0.5
                 cur_cfg_scale = 1.0 + scale_step * (cfg_scale - 1.0)
             next_token, next_prob = decode_one_token(
                 model, cur_token, input_pos, cur_cfg_scale, cfg_flag, **sampling_kwargs
