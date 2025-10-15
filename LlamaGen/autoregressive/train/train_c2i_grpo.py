@@ -212,6 +212,9 @@ def main(args):
                 "reward_disc_dim": args.reward_disc_dim,
                 "reward_disc_num_layers": args.reward_disc_num_layers,
                 "aux_ce_weight": args.aux_ce_weight,
+                "reward_use_embedcos": getattr(args, "reward_use_embedcos", False),
+                "reward_embedcos_weight": getattr(args, "reward_embedcos_weight", 0.0),
+                "train_mode": args.train_mode,
                 # "reward_use_mse": getattr(args, "reward_use_mse", False),
             },
             mode="online"
@@ -335,9 +338,11 @@ def main(args):
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True),
     ])
-    # Respect CLI-provided dataset argument
-    # dataset = build_dataset(args, transform=transform)
-    dataset = HFImageDataset(args.data_path, transform=transform)
+    # Respect CLI-provided dataset argument; allow switching between HF Arrow and built-in dataset
+    if args.data_loader == "builtin":
+        dataset = build_dataset(args, transform=transform)
+    else:
+        dataset = HFImageDataset(args.data_path, transform=transform)
     sampler = DistributedSampler(
         dataset,
         num_replicas=world_size,
@@ -487,6 +492,27 @@ def main(args):
                 decode_chunk, all_token_indices, chunk_size=8
             )  # [B*G, 3, H, W]
 
+            # Optional embedding cosine-similarity loss between GT pre-quantization z and predicted codebook embedding z_q (before decoder)
+            # Compute once per epoch/sample batch; shapes match codebook_embed_dim and latent grid
+            embedcos_loss_vec = None
+            if getattr(args, "reward_use_embedcos", False):
+                # GT pre-quantization embedding z (after encoder + quant_conv), shape [B, C_e, H', W']
+                z_gt_pre = vq_model.quant_conv(vq_model.encoder(x))
+                gt_vec = z_gt_pre.view(z_gt_pre.shape[0], -1)  # [B, D]
+                gt_vec_rep = repeat_tensor(gt_vec)  # [B*G, D]
+
+                def embedcos_chunk(chunk_indices, gt_vec_chunk):
+                    # Look up codebook embeddings for predicted indices to get z_q (pre-decoder), then compute 1 - cosine sim
+                    chunk_shape = [chunk_indices.shape[0], args.codebook_embed_dim, latent_size, latent_size]
+                    zq_chunk = vq_model.quantize.get_codebook_entry(chunk_indices, shape=chunk_shape, channel_first=True)
+                    zq_vec = zq_chunk.view(chunk_indices.shape[0], -1)
+                    cos_sim = F.cosine_similarity(zq_vec, gt_vec_chunk, dim=1)
+                    return 1.0 - cos_sim
+
+                embedcos_loss_vec = process_in_chunks(
+                    embedcos_chunk, all_token_indices, gt_vec_rep, chunk_size=16
+                )  # [B*G]
+
             # Reconstruction loss per-sample
             if args.reward_rec_type == "l1":
                 rec_loss_vec = torch.mean(torch.abs(pred_imgs - gt_x), dim=(1, 2, 3))
@@ -520,6 +546,8 @@ def main(args):
                 args.reward_perceptual_weight * perc_loss_vec +
                 args.reward_gan_weight * gan_loss_vec
             )
+            if embedcos_loss_vec is not None:
+                combined_loss = combined_loss + args.reward_embedcos_weight * embedcos_loss_vec
             rewards = -combined_loss  # [B * G]
         rewards_world = gather_tensor(rewards)
         dist.barrier()
@@ -536,6 +564,7 @@ def main(args):
                 "rec_loss_mean": rec_loss_vec.mean().item(),
                 "perc_loss_mean": perc_loss_vec.mean().item(),
                 "gan_loss_mean": (gan_loss_vec.mean().item() if 'gan_loss_vec' in locals() else 0.0),
+                "embedcos_loss_mean": (embedcos_loss_vec.mean().item() if embedcos_loss_vec is not None else 0.0),
             }, step=global_opt_step)
             # INSERT_YOUR_CODE
             # Log predicted and ground truth images as grids, with reward as subtitle
@@ -543,59 +572,59 @@ def main(args):
             import numpy as np
 
             # Only log up to 8 images for brevity
-            max_log_images = min(8, x.shape[0])
-            log_images = []
-            for i in range(max_log_images):
-                start_idx = i * args.num_generations
-                end_idx = (i + 1) * args.num_generations
-                pred_image_batch = pred_imgs[start_idx:end_idx]
-                reward_batch = rewards[start_idx:end_idx].cpu().numpy()
-                # Make grid of predicted images for this input
-                grid_pred = torchvision.utils.make_grid(
-                    pred_image_batch.cpu(),
-                    nrow=min(4, args.num_generations),
-                    normalize=True,
-                    value_range=(-1, 1)
-                )
-                # Compose reward string for this group
-                reward_str = ", ".join([f"{r:.2f}" for r in reward_batch])
-                caption_pred = f"pred_imgs@epoch{epoch}-idx{i} | rewards: [{reward_str}]"
-                # Ground truth image (single image)
-                gt_img = x[i].cpu()
-                # Normalize GT image to [0,1] for wandb
-                gt_img_disp = (gt_img * 0.5 + 0.5).clamp(0, 1)
-                caption_gt = f"gt@epoch{epoch}-idx{i}"
-                log_images.append(
-                    wandb.Image(grid_pred, caption=caption_pred)
-                )
-                log_images.append(
-                    wandb.Image(gt_img_disp, caption=caption_gt)
-                )
-            wandb.log(
-                {
-                    "images": log_images
-                },
-                step=epoch,
-                commit=False
-            )
-            # for i, img in enumerate(x):
-            #     start_idx = i * args.num_generations
-            #     end_idx = (i + 1) * args.num_generations
-            #     pred_image_batch = pred_imgs[start_idx:end_idx]
-            #     grid_pred = make_grid(pred_image_batch.cpu(), nrow=min(4, args.num_generations), normalize=True, value_range=(-1, 1))
-            #     wandb.log({
-            #         f"images_predicted_{i}": wandb.Image(grid_pred, caption=f"pred_imgs@iter{epoch}-idx{i}"),
-            #         f"images_gt_{i}": wandb.Image(img.cpu(), caption=f"gt@iter{epoch}-idx{i}"),
-            #     }, step=global_opt_step, commit=False)
+        #     max_log_images = min(8, x.shape[0])
+        #     log_images = []
+        #     for i in range(max_log_images):
+        #         start_idx = i * args.num_generations
+        #         end_idx = (i + 1) * args.num_generations
+        #         pred_image_batch = pred_imgs[start_idx:end_idx]
+        #         reward_batch = rewards[start_idx:end_idx].cpu().numpy()
+        #         # Make grid of predicted images for this input
+        #         grid_pred = torchvision.utils.make_grid(
+        #             pred_image_batch.cpu(),
+        #             nrow=min(4, args.num_generations),
+        #             normalize=True,
+        #             value_range=(-1, 1)
+        #         )
+        #         # Compose reward string for this group
+        #         reward_str = ", ".join([f"{r:.2f}" for r in reward_batch])
+        #         caption_pred = f"pred_imgs@epoch{epoch}-idx{i} | rewards: [{reward_str}]"
+        #         # Ground truth image (single image)
+        #         gt_img = x[i].cpu()
+        #         # Normalize GT image to [0,1] for wandb
+        #         gt_img_disp = (gt_img * 0.5 + 0.5).clamp(0, 1)
+        #         caption_gt = f"gt@epoch{epoch}-idx{i}"
+        #         log_images.append(
+        #             wandb.Image(grid_pred, caption=caption_pred)
+        #         )
+        #         log_images.append(
+        #             wandb.Image(gt_img_disp, caption=caption_gt)
+        #         )
+        #     wandb.log(
+        #         {
+        #             "images": log_images
+        #         },
+        #         step=epoch,
+        #         commit=False
+        #     )
+        #     # for i, img in enumerate(x):
+        #     #     start_idx = i * args.num_generations
+        #     #     end_idx = (i + 1) * args.num_generations
+        #     #     pred_image_batch = pred_imgs[start_idx:end_idx]
+        #     #     grid_pred = make_grid(pred_image_batch.cpu(), nrow=min(4, args.num_generations), normalize=True, value_range=(-1, 1))
+        #     #     wandb.log({
+        #     #         f"images_predicted_{i}": wandb.Image(grid_pred, caption=f"pred_imgs@iter{epoch}-idx{i}"),
+        #     #         f"images_gt_{i}": wandb.Image(img.cpu(), caption=f"gt@iter{epoch}-idx{i}"),
+        #     #     }, step=global_opt_step, commit=False)
 
-        samples = {
-            "class_ids": gt_y,
-            "token_indices": all_token_indices,
-            "gt_token_indices": gt_z,
-            "token_log_probs": all_token_log_probs.detach(),
-            "seq_log_probs": all_seq_log_probs.detach() ,
-            "rewards": rewards.detach(),
-        }
+        # samples = {
+        #     "class_ids": gt_y,
+        #     "token_indices": all_token_indices,
+        #     "gt_token_indices": gt_z,
+        #     "token_log_probs": all_token_log_probs.detach(),
+        #     "seq_log_probs": all_seq_log_probs.detach() ,
+        #     "rewards": rewards.detach(),
+        # }
         # free large tensors to mitigate fragmentation before next epoch
         del pred_imgs, all_token_indices, all_token_log_probs, all_seq_log_probs
         
@@ -633,7 +662,8 @@ def main(args):
             #     print('sample["gt_token_indices"]: ', sample["gt_token_indices"][0])
             
             prev_training_mode = gpt.training
-            gpt.eval()  # match sampling mode to avoid dropout-induced drift
+            if args.train_mode == "eval":
+                gpt.eval()  # match sampling mode to avoid dropout-induced drift
             with {
                 "bf16": torch.cuda.amp.autocast(dtype=torch.bfloat16),
                 "fp16": torch.cuda.amp.autocast(dtype=torch.float16),
@@ -642,7 +672,7 @@ def main(args):
             }[args.mixed_precision]:
                 logits_bt_vocab = tf_logits(gpt, sample["class_ids"], sample["gt_token_indices"], args.cls_token_num)  # [N, T, V]
                 
-            if prev_training_mode:
+            if args.train_mode == "eval" and prev_training_mode:
                 gpt.train()
                 
             logits = logits_bt_vocab / max(args.temperature, 1e-5)
@@ -893,6 +923,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-generations", type=int, default=8)
     # dataset
     parser.add_argument("--dataset", type=str, default='imagenet')
+    parser.add_argument("--data-loader", type=str, choices=["hf", "builtin"], default="hf", help="Choose 'hf' for Arrow HF loader or 'builtin' for build_dataset path")
     parser.add_argument("--data-path", type=str, required=True)
     parser.add_argument("--num-workers", type=int, default=8)
     # sampling
@@ -906,6 +937,7 @@ if __name__ == "__main__":
     parser.add_argument("--adv-clip-max", type=float, default=5.0)
     parser.add_argument("--clip-range", type=float, default=1e-4)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
+    parser.add_argument("--train-mode", type=str, choices=["train", "eval"], default="train", help="Training mode")
     # reward config
     parser.add_argument("--reward-rec-type", type=str, choices=["l1", "l2"], default="l2")
     # parser.add_argument("--reward-use-mse", action='store_true', help="Enable using MSE reconstruction as reward term (overrides --reward-rec-type)")
@@ -916,6 +948,8 @@ if __name__ == "__main__":
     parser.add_argument("--reward-disc-dim", type=int, default=64)
     parser.add_argument("--reward-disc-num-layers", type=int, default=3)
     parser.add_argument("--reward-disc-ckpt", type=str, default=None)
+    parser.add_argument("--reward-use-embedcos", action='store_true', help="Enable cosine-similarity reward between GT pre-quantization z and predicted codebook embedding z_q")
+    parser.add_argument("--reward-embedcos-weight", type=float, default=0.0, help="Weight for cosine-similarity embedding reward (1 - cos sim) in combined loss")
     parser.add_argument("--aux-ce-weight", type=float, default=0.0, help="Weight for auxiliary CE(gt) loss in training loop (0 disables)")
     # KL regularization
     parser.add_argument("--kl-coef", type=float, default=0.01, help="Weight for KL(current||base) penalty")
