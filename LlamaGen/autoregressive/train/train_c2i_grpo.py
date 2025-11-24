@@ -3,6 +3,7 @@ import time
 import argparse
 import contextlib
 import functools
+import math
 
 import torch
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -88,7 +89,6 @@ def ensure_dir(path: str):
     if path and not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
         
-
 class HFImageDataset(torch.utils.data.Dataset):
     """HuggingFace arrow-based dataset loader for images and labels.
     Expects a directory saved via datasets.save_to_disk with data-*.arrow shards,
@@ -121,15 +121,13 @@ class HFImageDataset(torch.utils.data.Dataset):
             image = self.transform(image)
         return image, torch.tensor(label, dtype=torch.long)
 
-
-def tf_logits(model: nn.Module, cls_ids: torch.Tensor, gt_tokens: torch.Tensor, cls_token_num: int):
-    # teacher forcing input excludes the last target token
-    tf_input = gt_tokens[:, :-1]
+def tf_logits(model: nn.Module, cls_ids: torch.Tensor, gt_tokens: torch.Tensor, cls_token_num: int, tf_input_override: torch.Tensor | None = None):
+    # teacher forcing input excludes the last target token, unless overridden by noisy input
+    tf_input = gt_tokens[:, :-1] if tf_input_override is None else tf_input_override
     input_pos = torch.arange(0, tf_input.shape[1] + cls_token_num, device=gt_tokens.device)
     logits, _ = model(idx=tf_input, cond_idx=cls_ids, input_pos=input_pos)
     aligned_logits = logits[:, cls_token_num - 1:]
     return aligned_logits  # [B, T, V]
-
 
 def sample_one_sequence_from_tf(logits_bt_vocab: torch.Tensor, temperature: float, top_k: int, top_p: float) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Given TF logits [B, T, V], sample one token sequence per item and compute
@@ -172,6 +170,34 @@ def gather_tensor(tensor):
         dist.all_gather(gathered_tensors, tensor)
         return torch.cat(gathered_tensors, dim=0)
 
+# Noisy context schedule and perturbation helpers
+def compute_noise_cap(progress_t: float) -> float:
+    sched = getattr(args, "noise_schedule", "linear")
+    max_eps = max(0.0, min(1.0, getattr(args, "noise_eps_max", 0.0)))
+    if max_eps <= 0.0:
+        return 0.0
+    if sched == "cosine":
+        return max_eps * (0.5 - 0.5 * math.cos(math.pi * progress_t))
+    return max_eps * progress_t
+
+def perturb_teacher_forcing_inputs(gt_tokens_full: torch.Tensor, rng: torch.Generator | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    # gt_tokens_full: [N, T]
+    device_local = gt_tokens_full.device
+    tf_base = gt_tokens_full[:, :-1]
+    N, Tm1 = tf_base.shape
+    # Fixed perturbation rate (no annealing)
+    if not getattr(args, "use_token_noise", False):
+        return tf_base, torch.zeros((N,), device=device_local, dtype=torch.float32)
+    
+    prob = max(0.0, min(1.0, args.token_noise_prob))
+    eps = torch.full((N,), prob, device=device_local, dtype=torch.float32)
+    bernoulli_probs = eps.view(N, 1).expand(N, Tm1)
+    bern = torch.bernoulli(bernoulli_probs)  # float 0/1
+    bern_bool = bern.bool()
+    ui = torch.randint(low=0, high=int(args.codebook_size), size=(N, Tm1), device=device_local, generator=rng, dtype=tf_base.dtype)
+    tf_noisy = torch.where(bern_bool, ui, tf_base)
+    return tf_noisy, eps
+
 # No broadcast of samples in the new setting
 def main(args):
     assert torch.cuda.is_available(), "Training requires GPUs."
@@ -181,6 +207,8 @@ def main(args):
     device = global_rank % torch.cuda.device_count()
     torch.cuda.set_device(device)
     torch.manual_seed(args.global_seed * world_size + global_rank)
+    # Wall-clock timer for total training duration
+    total_start_time = time.time()
 
     # Initialize Weights & Biases (rank 0 only)
     if args.use_wandb and global_rank == 0:
@@ -188,7 +216,7 @@ def main(args):
             raise ImportError("wandb is not installed, please `pip install wandb` or disable --use-wandb")
         wandb.init(
             project=args.wandb_project,
-            name=f'{args.wandb_run_name}-mse-{args.reward_rec_weight}-lpips-{args.reward_perceptual_weight}-gan-{args.reward_use_gan}-kl-{args.use_kl_loss}-ce-{args.aux_ce_weight}',
+            name=f'{args.wandb_run_name}-lr-{args.lr}-mse-{args.reward_rec_weight}-lpips-{args.reward_perceptual_weight}-gan-{args.reward_use_gan}-ecs-{args.reward_embedcos_weight}-kl-{args.use_kl_loss}-{args.kl_coef}-ce-{args.aux_ce_weight}-noisy-{args.use_token_noise}-{args.token_noise_prob}-clip-{args.clip_range}-uncond-{args.uncond_prob}',
             config={
                 "gpt_model": args.gpt_model,
                 "vq_model": args.vq_model,
@@ -214,7 +242,7 @@ def main(args):
                 "aux_ce_weight": args.aux_ce_weight,
                 "reward_use_embedcos": getattr(args, "reward_use_embedcos", False),
                 "reward_embedcos_weight": getattr(args, "reward_embedcos_weight", 0.0),
-                "train_mode": args.train_mode,
+                "train_mode": args.sample_model_mode,
                 # "reward_use_mse": getattr(args, "reward_use_mse", False),
             },
             mode="online"
@@ -264,6 +292,8 @@ def main(args):
         num_classes=args.num_classes,
         cls_token_num=args.cls_token_num,
         model_type='c2i',
+        # ensure unconditional embedding slot exists and is configurable
+        class_dropout_prob=float(getattr(args, "uncond_prob", 0.1)),
     ).to(device)
     if args.gpt_ckpt:
         ckpt = torch.load(args.gpt_ckpt, map_location="cpu")
@@ -290,6 +320,7 @@ def main(args):
             num_classes=args.num_classes,
             cls_token_num=args.cls_token_num,
             model_type='c2i',
+            class_dropout_prob=float(getattr(args, "uncond_prob", 0.1)),
         ).to(device)
         base_ckpt_path = getattr(args, "kl_base_ckpt", None) or args.gpt_ckpt
         if base_ckpt_path:
@@ -356,6 +387,9 @@ def main(args):
 
     # Sampling loop
     global_opt_step = 0
+    # Track total optimizer steps for normalized progress t in [0,1]
+    total_updates = max(1, math.ceil((args.sample_batch_size * args.num_generations / max(1, args.train_batch_size)) * args.epochs / max(1, args.gradient_accumulation_steps)))
+    
     if global_rank == 0:
         num_seq_per_epoch = world_size * args.sample_batch_size * args.num_generations
         num_grad_updates_per_epoch = (args.sample_batch_size * args.num_generations) / (args.train_batch_size * args.gradient_accumulation_steps)
@@ -424,13 +458,15 @@ def main(args):
         # optimizer.zero_grad()
         # sample sequence logits with teacher forcing
         with torch.no_grad():
+            # Build TF inputs (possibly noisy) once during sampling so training reuses them deterministically
+            tf_inputs_for_sampling, eps_vec = perturb_teacher_forcing_inputs(z)
             with {
                 "bf16": torch.cuda.amp.autocast(dtype=torch.bfloat16),
                 "fp16": torch.cuda.amp.autocast(dtype=torch.float16),
                 "fp32": contextlib.nullcontext(),
                 "tf32": contextlib.nullcontext(),
             }[args.mixed_precision]:
-                logits_bt_vocab = tf_logits(gpt, y, z, args.cls_token_num)  # [B, T, V]
+                logits_bt_vocab = tf_logits(gpt, y, z, args.cls_token_num, tf_input_override=tf_inputs_for_sampling)  # [B, T, V]
             # if global_rank == 0:
             #     print(f'y: {y[0]}')
             #     print(f'gt_code:{z[0]}')
@@ -549,6 +585,7 @@ def main(args):
             if embedcos_loss_vec is not None:
                 combined_loss = combined_loss + args.reward_embedcos_weight * embedcos_loss_vec
             rewards = -combined_loss  # [B * G]
+            
         rewards_world = gather_tensor(rewards)
         dist.barrier()
         if args.use_wandb and global_rank == 0:
@@ -568,8 +605,6 @@ def main(args):
             }, step=global_opt_step)
             # INSERT_YOUR_CODE
             # Log predicted and ground truth images as grids, with reward as subtitle
-            import torchvision
-            import numpy as np
 
             # Only log up to 8 images for brevity
         #     max_log_images = min(8, x.shape[0])
@@ -617,14 +652,19 @@ def main(args):
         #     #         f"images_gt_{i}": wandb.Image(img.cpu(), caption=f"gt@iter{epoch}-idx{i}"),
         #     #     }, step=global_opt_step, commit=False)
 
-        # samples = {
-        #     "class_ids": gt_y,
-        #     "token_indices": all_token_indices,
-        #     "gt_token_indices": gt_z,
-        #     "token_log_probs": all_token_log_probs.detach(),
-        #     "seq_log_probs": all_seq_log_probs.detach() ,
-        #     "rewards": rewards.detach(),
-        # }
+        # Repeat the same TF inputs per generation as well so each generated sample shares the same noisy context of its source
+        tf_inputs_repeated = torch.repeat_interleave(tf_inputs_for_sampling, repeats=args.num_generations, dim=0)  # [B*G, T-1]
+        eps_repeated = torch.repeat_interleave(eps_vec, repeats=args.num_generations, dim=0)  # [B*G]
+        samples = {
+            "class_ids": gt_y,
+            "token_indices": all_token_indices,
+            "gt_token_indices": gt_z,
+            "token_log_probs": all_token_log_probs.detach(),
+            "seq_log_probs": all_seq_log_probs.detach(),
+            "rewards": rewards.detach(),
+            "tf_teacher_inputs": tf_inputs_repeated.detach(),  # [B*G, T-1]
+            "tf_noise_eps": eps_repeated.detach(),             # [B*G]
+        }
         # free large tensors to mitigate fragmentation before next epoch
         del pred_imgs, all_token_indices, all_token_log_probs, all_seq_log_probs
         
@@ -647,6 +687,8 @@ def main(args):
         optimizer.zero_grad()
         num_samples = samples["token_indices"].shape[0]
         step_idx = 0
+        
+        # training loop uses precomputed noisy inputs from sampling; no on-the-fly noise needed
         for start in tqdm(
             range(0, num_samples, args.train_batch_size),
             desc=f"Epoch {epoch}: training", 
@@ -662,7 +704,7 @@ def main(args):
             #     print('sample["gt_token_indices"]: ', sample["gt_token_indices"][0])
             
             prev_training_mode = gpt.training
-            if args.train_mode == "eval":
+            if args.sample_model_mode == "eval" or args.sample_model_mode == "twice":
                 gpt.eval()  # match sampling mode to avoid dropout-induced drift
             with {
                 "bf16": torch.cuda.amp.autocast(dtype=torch.bfloat16),
@@ -670,9 +712,11 @@ def main(args):
                 "fp32": contextlib.nullcontext(),
                 "tf32": contextlib.nullcontext(),
             }[args.mixed_precision]:
-                logits_bt_vocab = tf_logits(gpt, sample["class_ids"], sample["gt_token_indices"], args.cls_token_num)  # [N, T, V]
+                # Use stored per-sample noisy TF inputs from sampling stage
+                tf_override = sample["tf_teacher_inputs"]  # [N, T-1]
+                logits_bt_vocab = tf_logits(gpt, sample["class_ids"], sample["gt_token_indices"], args.cls_token_num, tf_input_override=tf_override)  # [N, T, V]
                 
-            if args.train_mode == "eval" and prev_training_mode:
+            if args.sample_model_mode == "twice" and prev_training_mode:
                 gpt.train()
                 
             logits = logits_bt_vocab / max(args.temperature, 1e-5)
@@ -700,8 +744,9 @@ def main(args):
                         "fp32": contextlib.nullcontext(),
                         "tf32": contextlib.nullcontext(),
                     }[args.mixed_precision]:
+                        # Use same stored noisy TF inputs for base model KL, to compute KL on identical contexts
                         base_logits_bt_vocab = tf_logits(
-                            gpt_base, sample["class_ids"], sample["gt_token_indices"], args.cls_token_num
+                            gpt_base, sample["class_ids"], sample["gt_token_indices"], args.cls_token_num, tf_input_override=sample["tf_teacher_inputs"]
                         )  # [N, T, V]
                 # Compute KL in fp32 for stability; same temperature, no filtering
                 temp = max(args.temperature, 1e-5)
@@ -713,7 +758,6 @@ def main(args):
                 ref_token_logps_for_kl = base_logps_nofilter.gather(-1, sample["token_indices"].unsqueeze(-1)).squeeze(-1)
                 # per-token KL used in GRPO: exp(ref - cur) - (ref - cur) - 1
                 per_token_kl = torch.exp(ref_token_logps_for_kl - cur_token_logps_for_kl) - (ref_token_logps_for_kl - cur_token_logps_for_kl) - 1
-                print(f"per_token_kl: {per_token_kl.mean().item()}")
             
             advantages = torch.clamp(
                 sample["advantages"],
@@ -757,18 +801,47 @@ def main(args):
             
             # add GRPO KL penalty
             if per_token_kl is not None and args.use_kl_loss:
-                    print(f"per_token_kl: {per_token_kl.mean().item()}")
-                    print(f"per_token_loss: {per_token_loss.mean().item()}")
-                    per_token_loss = per_token_loss + args.kl_coef * per_token_kl
+                print(f"per_token_kl: {per_token_kl.mean().item()}")
+                print(f"per_token_loss: {per_token_loss.mean().item()}")
+                per_token_loss = per_token_loss + args.kl_coef * per_token_kl
             
-            seq_loss = per_token_loss.mean(dim=-1)  # [N]
+            # Optional token dropout: randomly ignore a subset of tokens for gradient update
+            token_mask = None
+            keep_counts = None
+            if getattr(args, "use_token_dropout", False) and getattr(args, "token_dropout_ratio", 0.0) > 0.0:
+                drop_ratio = max(0.0, min(1.0, float(args.token_dropout_ratio)))
+                keep_prob = 1.0 - drop_ratio
+                token_mask = torch.bernoulli(
+                    torch.full_like(per_token_loss, keep_prob)
+                ).to(per_token_loss.dtype)  # [N, T]
+                # Ensure at least one token is kept per sequence to avoid division by zero
+                keep_counts = token_mask.sum(dim=1)  # [N]
+                zero_keep = keep_counts == 0
+                if zero_keep.any():
+                    token_mask[zero_keep, 0] = 1.0
+                    keep_counts = token_mask.sum(dim=1)
+                seq_loss = (per_token_loss * token_mask).sum(dim=-1) / keep_counts.clamp_min(1)  # [N]
+            else:
+                seq_loss = per_token_loss.mean(dim=-1)  # [N]
             loss = seq_loss.mean()
+            
+            if args.sample_model_mode == "twice":
+                with {
+                    "bf16": torch.cuda.amp.autocast(dtype=torch.bfloat16),
+                    "fp16": torch.cuda.amp.autocast(dtype=torch.float16),
+                    "fp32": contextlib.nullcontext(),
+                    "tf32": contextlib.nullcontext(),
+                }[args.mixed_precision]:
+                    # Use same stored TF inputs for CE pass
+                    logits_bt_vocab_ce = tf_logits(gpt, sample["class_ids"], sample["gt_token_indices"], args.cls_token_num, tf_input_override=sample["tf_teacher_inputs"])  # [N, T, V]
+            else:
+                logits_bt_vocab_ce = logits_bt_vocab
 
             # Auxiliary CE loss (teacher-forced NLL over GT tokens)
-            aux_ce_unweighted = torch.tensor(0.0, device=logits_bt_vocab.device)
+            aux_ce_unweighted = torch.tensor(0.0, device=logits_bt_vocab_ce.device)
             if getattr(args, "aux_ce_weight", 0.0) and args.aux_ce_weight > 0:
                 ce_val = F.cross_entropy(
-                    logits_bt_vocab.reshape(-1, logits_bt_vocab.shape[-1]).to(torch.float32),
+                    logits_bt_vocab_ce.reshape(-1, logits_bt_vocab_ce.shape[-1]).to(torch.float32),
                     sample["gt_token_indices"].reshape(-1),
                     reduction='mean'
                 )
@@ -812,10 +885,10 @@ def main(args):
 
                 # Periodic checkpoint saving
                 if args.ckpt_every and args.ckpt_every > 0 and ((global_opt_step + 1) % args.ckpt_every == 0):
-                    if 'cuda' in str(device):   
-                        torch.cuda.empty_cache()
-                    ckpt_dir = os.path.join(args.ckpt_dir, f"{args.wandb_run_name}-mse-{args.reward_rec_weight}-lpips-{args.reward_perceptual_weight}-gan-{args.reward_use_gan}-kl-{args.use_kl_loss}-ce-{args.aux_ce_weight}-{global_opt_step:07d}")
+                    ckpt_dir = os.path.join(args.ckpt_dir, f"{args.wandb_run_name}-lr-{args.lr}-mse-{args.reward_rec_weight}-lpips-{args.reward_perceptual_weight}-gan-{args.reward_use_gan}-ecs-{args.reward_embedcos_weight}-kl-{args.use_kl_loss}-{args.kl_coef}-ce-{args.aux_ce_weight}-noisy-{args.use_token_noise}-{args.token_noise_prob}-clip-{args.clip_range}-uncond-{args.uncond_prob}-{global_opt_step:07d}")
                     ensure_dir(ckpt_dir)
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
                     # Prefer sharded state dict to reduce memory usage
                     # if getattr(args, 'ckpt_sharded', True):
@@ -865,15 +938,14 @@ def main(args):
 
                     if global_rank == 0:
                         print(f"Saved checkpoint to {ckpt_dir}")
-                    if 'cuda' in str(device):
+                    if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                 
                 global_opt_step += 1
                 # print(f'epoch-{epoch}: step:{global_opt_step}')
                 
-
         # Optionally log image grids
-        if 'cuda' in str(device):
+        if torch.cuda.is_available():
             torch.cuda.empty_cache()
         if global_rank == 0:
             print(f"Grad norm: {grad_norm}")
@@ -891,6 +963,22 @@ def main(args):
 
     if dist.is_initialized():
         dist.barrier()
+        # Compute and report total training time (rank 0 only)
+        total_time_min = (time.time() - total_start_time) / 60
+        if global_rank == 0:
+            h = int(total_time_min // 60)
+            m = int(total_time_min % 60)
+            min_val = int(total_time_min)
+            hms = f"{h:02d}:{m:02d}"
+            print(f"Total training time: {hms} ({total_time_min:.2f} min)")
+            if args.use_wandb:
+                try:
+                    wandb.log({
+                        "total_training_time_min": float(total_time_min),
+                        "total_training_time_hm": hms,
+                    }, step=global_opt_step)
+                except Exception:
+                    pass
         dist.destroy_process_group()
     if args.use_wandb and (not dist.is_initialized() or dist.get_rank() == 0):
         wandb.finish()
@@ -921,6 +1009,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--num-generations", type=int, default=8)
+    parser.add_argument("--uncond-prob", type=float, default=0.1, help="Probability to drop class conditioning (unconditional training)")
     # dataset
     parser.add_argument("--dataset", type=str, default='imagenet')
     parser.add_argument("--data-loader", type=str, choices=["hf", "builtin"], default="hf", help="Choose 'hf' for Arrow HF loader or 'builtin' for build_dataset path")
@@ -937,7 +1026,7 @@ if __name__ == "__main__":
     parser.add_argument("--adv-clip-max", type=float, default=5.0)
     parser.add_argument("--clip-range", type=float, default=1e-4)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
-    parser.add_argument("--train-mode", type=str, choices=["train", "eval"], default="train", help="Training mode")
+    parser.add_argument("--sample-model-mode", type=str, choices=["train", "eval", "twice"], default="eval", help="Training mode")
     # reward config
     parser.add_argument("--reward-rec-type", type=str, choices=["l1", "l2"], default="l2")
     # parser.add_argument("--reward-use-mse", action='store_true', help="Enable using MSE reconstruction as reward term (overrides --reward-rec-type)")
@@ -966,5 +1055,11 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt-every", type=int, default=0, help="Save checkpoint every N optimizer steps (0 to disable)")
     parser.add_argument("--ckpt-dir", type=str, default="checkpoints", help="Directory to save checkpoints")
     parser.add_argument("--ckpt-sharded", action='store_true', help="Save sharded model state instead of consolidated full state")
+    # noisy context regularization
+    parser.add_argument("--use-token-noise", action='store_true', help="Enable uniform token noise on teacher-forcing inputs")
+    parser.add_argument("--token-noise-prob", type=float, default=0.5, help="Bernoulli probability for token perturbation (0..1)")
+    # token dropout during loss aggregation
+    parser.add_argument("--use-token-dropout", action='store_true', help="Randomly drop a fraction of tokens from contributing to the loss")
+    parser.add_argument("--token-dropout-ratio", type=float, default=0.5, help="Fraction of tokens to drop per sequence during training (0..1)")
     args = parser.parse_args()
     main(args)

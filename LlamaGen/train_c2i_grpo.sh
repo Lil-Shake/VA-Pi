@@ -78,13 +78,15 @@ srun torchrun \
     --gradient-accumulation-steps 16 \
     --num-generations 8 \
     --temperature 1.0 --top-k 0 --top-p 1.0 \
-    --epochs 60 \
-    --ckpt-every 60 \
+    --epochs 100 \
+    --ckpt-every 100 \
     --lr 1e-5 --weight-decay 1e-4 --beta1 0.9 --beta2 0.999 \
     --max-grad-norm 1.0 --clip-range 0.2 --adv-clip-max 5.0 \
     --mixed-precision bf16 --data-parallel fsdp \
-    --reward-rec-weight 1.0 \
+    --reward-rec-weight 0.0 \
     --reward-perceptual-weight 1.0 \
-    --aux-ce-weight 0.07 \
+    --reward-use-embedcos \
+    --reward-embedcos-weight 1.0 \
+    --aux-ce-weight 0.1 \
     --use-wandb --wandb-project autoreg-grpo --wandb-entity ${WANDB_ENTITY:-none} --wandb-run-name "c2i-grpo" \
     "$@"
