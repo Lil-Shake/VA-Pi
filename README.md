@@ -1,10 +1,10 @@
 <div align="center">
 
-# VA-$\boldsymbol{\pi}$: Variational Policy Alignment for Pixel-Aware Autoregressive Generation
+# VA-π: Variational Policy Alignment for Pixel-Aware Autoregressive Generation
 
 [![arXiv](https://img.shields.io/badge/arXiv-2112.09133-B31B1B.svg)](https://arxiv.org/abs/2112.09133)[![Hugging Face](https://img.shields.io/badge/HuggingFace-Space-yellow)](https://huggingface.co/spaces/xxx)[![GitHub](https://img.shields.io/badge/GitHub-Project-black?logo=github)](https://github.com/xxx)
 
-[Xinyao Liao$^*$](https://lil-shake.github.io/), [Qiyuan He$^{*†}$](https://qy-h00.github.io/), [Kai Xu](https://kai422.github.io/), [Xiaoye Qu](https://scholar.google.com/citations?user=rT3hqdcAAAAJ&hl=zh-CN), [Yicong Li](https://yl3800.github.io/), [Wei Wei](https://www.eric-weiwei.com/), [Angela Yao](https://www.comp.nus.edu.sg/~ayao/)
+[Xinyao Liao*](https://lil-shake.github.io/), [Qiyuan He*†$](https://qy-h00.github.io/), [Kai Xu](https://kai422.github.io/), [Xiaoye Qu](https://scholar.google.com/citations?user=rT3hqdcAAAAJ&hl=zh-CN), [Yicong Li](https://yl3800.github.io/), [Wei Wei](https://www.eric-weiwei.com/), [Angela Yao](https://www.comp.nus.edu.sg/~ayao/)
 
 $^*$ Equal contribution. $^†$ Project lead.
 </div>
@@ -47,6 +47,7 @@ Post-train C2I task on LlamaGen.
 
 ```
 cd /path/to/VA-Pi/LlamaGen
+
 bash scripts/autoregressive/train_c2i_grpo_8gpu.sh \
   /path/to/vq_ds16_c2i.pt \
   /path/to/c2i_XXL_384.pt \
@@ -91,6 +92,7 @@ First sample 50k images using the post-trained model.
 
 ```
 cd /path/to/VA-Pi/LlamaGen
+
 bash scripts/autoregressive/sample_c2i.sh \
   /path/to/vq_ds16_c2i.pt \
   /path/to/c2i_XXL_384.pt \
@@ -109,6 +111,7 @@ First generate images on GenEval prompts using the post-trained models.
 **For LlamaGen-XL:**
 ```
 cd /path/to/VA-Pi/LlamaGen
+
 bash scripts/autoregressive/sample_t2i_geneval.sh \
   /path/to/vq_ds16_t2i.pt \
   /path/to/t2i_XL_or_your_grpo_ckpt
@@ -119,6 +122,7 @@ bash scripts/autoregressive/sample_t2i_geneval.sh \
 **For Janus-Pro 1B:**
 ```
 cd /path/to/VA-Pi/Janus
+
 bash run_geneval_infer.sh \
   --prompts-dir /path/to/evaluation_metadata_geneval.jsonl \
   --base-model-path /path/to/Janus-Pro-1B_or_hf_repo \
