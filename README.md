@@ -17,7 +17,7 @@ $^*$ Equal contribution. $^†$ Project lead.
 - [03/2025] Code is publicly available.
 
 ## 📑 Abstract
-We propose **VA-**$\boldsymbol{\pi}$, a lightweight post-training framework that directly optimizes **visual AR models** with a principled **pixel-space objective**, solved by introducing **evidence lower bound (ELBO)** that unifies pixel reconstruction and autoregressive modeling. To optimize under the discrete token space, VA-$\pi$ introduces a **reinforcement-based alignment strategy** that treats the AR generator as a policy, uses pixel-space reconstruction quality as its intrinsic reward and Next Token Prediction (NTP) loss with noisy context as regulizer.
+We propose **VA-π**, a lightweight post-training framework that directly optimizes **visual AR models** with a principled **pixel-space objective**, solved by introducing **evidence lower bound (ELBO)** that unifies pixel reconstruction and autoregressive modeling. To optimize under the discrete token space, VA-π introduces a **reinforcement-based alignment strategy** that treats the AR generator as a policy, uses pixel-space reconstruction quality as its intrinsic reward and Next Token Prediction (NTP) loss with noisy context as regulizer.
 
 ## 🔧 Installation
 
