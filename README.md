@@ -14,7 +14,7 @@ $^*$ Equal contribution. $^†$ Project lead.
 </p>
 
 ## 📌 Release
-- [03/2025] Code is publicly available.
+- [12/2025] Paper and code is publicly available.
 
 ## 📑 Abstract
 We propose **VA-π**, a lightweight post-training framework that directly optimizes **visual AR models** with a principled **pixel-space objective**, solved by introducing **evidence lower bound (ELBO)** that unifies pixel reconstruction and autoregressive modeling. To optimize under the discrete token space, VA-π introduces a **reinforcement-based alignment strategy** that treats the AR generator as a policy, uses pixel-space reconstruction quality as its intrinsic reward and Next Token Prediction (NTP) loss with noisy context as regularizer. VA-π enables rapid adaptation of existing AR generators, without neither tokenizer retraining nor external reward models. With only 1\% ImageNet-1K data and 25 minutes of tuning, it reduces FID from 14.36 to 7.65 and improves IS from 86.55 to 116.70 on LlamaGen-XXL, while also yielding notable gains in the text-to-image task on GenEval for both visual generation model (LlamaGen: from 0.306 to 0.339) and unified multi-modal model (Janus-Pro: from 0.725 to 0.744). 
