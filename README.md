@@ -141,7 +141,7 @@ This project builds upon and is inspired by several excellent open-source codeba
 ## ⭐ Citation
 
 ```
-@misc{liao2025vapivariationalpolicyalignment,
+@misc{vapi2025,
       title={VA-$\pi$: Variational Policy Alignment for Pixel-Aware Autoregressive Generation}, 
       author={Xinyao Liao and Qiyuan He and Kai Xu and Xiaoye Qu and Yicong Li and Wei Wei and Angela Yao},
       year={2025},
