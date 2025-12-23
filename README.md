@@ -2,7 +2,7 @@
 
 # VA-π: Variational Policy Alignment for Pixel-Aware Autoregressive Generation
 
-[![arXiv](https://img.shields.io/badge/arXiv-2112.09133-B31B1B.svg)](https://arxiv.org/abs/2112.09133)[![Hugging Face](https://img.shields.io/badge/HuggingFace-Space-yellow)](https://huggingface.co/spaces/xxx)[![GitHub](https://img.shields.io/badge/GitHub-Project-black?logo=github)](https://lil-shake.github.io/va-pi.github.io/)
+[![arXiv](https://img.shields.io/badge/arXiv-2112.09133-B31B1B.svg)](https://arxiv.org/abs/2512.19680)[![GitHub](https://img.shields.io/badge/GitHub-Project-black?logo=github)](https://lil-shake.github.io/va-pi.github.io/)
 
 [Xinyao Liao*](https://lil-shake.github.io/), [Qiyuan He*†](https://qy-h00.github.io/), [Kai Xu](https://kai422.github.io/), [Xiaoye Qu](https://scholar.google.com/citations?user=rT3hqdcAAAAJ&hl=zh-CN), [Yicong Li](https://yl3800.github.io/), [Wei Wei](https://www.eric-weiwei.com/), [Angela Yao](https://www.comp.nus.edu.sg/~ayao/)
 
@@ -139,3 +139,15 @@ Our generated folder `output_geneval_samples/` matches GenEval's expected layout
 This project builds upon and is inspired by several excellent open-source codebase [LlamaGen](https://github.com/FoundationVision/LlamaGen), [Janus](https://github.com/deepseek-ai/Janus), and [geneval](https://github.com/djghosh13/geneval).
 
 ## ⭐ Citation
+
+```
+@misc{liao2025vapivariationalpolicyalignment,
+      title={VA-$\pi$: Variational Policy Alignment for Pixel-Aware Autoregressive Generation}, 
+      author={Xinyao Liao and Qiyuan He and Kai Xu and Xiaoye Qu and Yicong Li and Wei Wei and Angela Yao},
+      year={2025},
+      eprint={2512.19680},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2512.19680}, 
+}
+```
