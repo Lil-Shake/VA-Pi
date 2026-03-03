@@ -2,7 +2,7 @@
 
 # VA-π: Variational Policy Alignment for Pixel-Aware Autoregressive Generation
 
-[![arXiv](https://img.shields.io/badge/arXiv-2112.09133-B31B1B.svg)](https://arxiv.org/abs/2512.19680)[![GitHub](https://img.shields.io/badge/GitHub-Project-black?logo=github)](https://lil-shake.github.io/va-pi.github.io/)
+[![arXiv](https://img.shields.io/badge/arXiv-2512.19680-B31B1B.svg)](https://arxiv.org/abs/2512.19680)[![GitHub](https://img.shields.io/badge/GitHub-Project-black?logo=github)](https://lil-shake.github.io/va-pi.github.io/)[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Model_Weights-yellow)](https://huggingface.co/LilShake66/VA-Pi)
 
 [Xinyao Liao*](https://lil-shake.github.io/), [Qiyuan He*†](https://qy-h00.github.io/), [Kai Xu](https://kai422.github.io/), [Xiaoye Qu](https://scholar.google.com/citations?user=rT3hqdcAAAAJ&hl=zh-CN), [Yicong Li](https://yl3800.github.io/), [Wei Wei](https://www.eric-weiwei.com/), [Angela Yao](https://www.comp.nus.edu.sg/~ayao/)
 
@@ -13,11 +13,13 @@ $^*$ Equal contribution. $^†$ Project lead.
   <img src="assets/vis-c2i-t2i_00.png" width="720">
 </p>
 
-## 📌 Release
+## 📌 News
+- [02/2026] Paper accepted to **CVPR 2026**.
+- [02/2026] Model weights released on [Hugging Face](https://huggingface.co/LilShake66/VA-Pi).
 - [12/2025] Paper and code is publicly available.
 
 ## 📑 Abstract
-We propose **VA-π**, a lightweight post-training framework that directly optimizes **visual AR models** with a principled **pixel-space objective**, solved by introducing **evidence lower bound (ELBO)** that unifies pixel reconstruction and autoregressive modeling. To optimize under the discrete token space, VA-π introduces a **reinforcement-based alignment strategy** that treats the AR generator as a policy, uses pixel-space reconstruction quality as its intrinsic reward and Next Token Prediction (NTP) loss with noisy context as regularizer. VA-π enables rapid adaptation of existing AR generators, without neither tokenizer retraining nor external reward models. With only 1\% ImageNet-1K data and 25 minutes of tuning, it reduces FID from 14.36 to 7.65 and improves IS from 86.55 to 116.70 on LlamaGen-XXL, while also yielding notable gains in the text-to-image task on GenEval for both visual generation model (LlamaGen: from 0.306 to 0.339) and unified multi-modal model (Janus-Pro: from 0.725 to 0.744). 
+We propose **VA-π**, a lightweight post-training framework that directly optimizes **visual AR models** with a principled **pixel-space objective**, solved by introducing **evidence lower bound (ELBO)** that unifies pixel reconstruction and autoregressive modeling. To optimize under the discrete token space, VA-π introduces a **reinforcement-based alignment strategy** that treats the AR generator as a policy, uses pixel-space reconstruction quality as its intrinsic reward and Next Token Prediction (NTP) loss with noisy context as regularizer. VA-π enables rapid adaptation of existing AR generators, without either tokenizer retraining or external reward models. With only 1\% ImageNet-1K data and 25 minutes of tuning, it reduces FID from 14.36 to 7.65 and improves IS from 86.55 to 116.70 on LlamaGen-XXL, while also yielding notable gains in the text-to-image task on GenEval for both visual generation model (LlamaGen: from 0.306 to 0.339) and unified multi-modal model (Janus-Pro: from 0.725 to 0.744). 
 
 ## 🔧 Installation
 
@@ -26,20 +28,20 @@ First, clone this repository.
 git clone https://github.com/Lil-Shake/VA-Pi
 cd VA-Pi
 ```
-Create environments and intall packages for LlamaGen and Janus-Pro.
+Create environments and install packages for LlamaGen and Janus-Pro.
 ```
 # For LlamaGen
 conda create -n vapi_llamagen python=3.10
 conda activate vapi_llamagen
-pip install -r llamaGen/requirements.txt
+pip install -r LlamaGen/requirements.txt
 
 # For Janus-Pro
 conda create -n vapi_janus python=3.10
 conda activate vapi_janus
-pip install -r llamaGen/requirements.txt
+pip install -r Janus/requirements.txt
 ```
 
-Download [ImageNet-1k](https://www.image-net.org/download.php?utm_source=chatgpt.com) for C2I training on LlamaGen, [LAION-COCO](https://laion.ai/blog/laion-coco/) for T2I training on LlamaGen. Load dataset [Flux-Reason](https://huggingface.co/datasets/LucasFang/FLUX-Reason-6M) dataset from HuggingFace for T2I training on Janus-Pro. Download pretrained [LlamaGen](https://huggingface.co/FoundationVision/LlamaGen/tree/main) and [Janus-Pro 1B](https://huggingface.co/deepseek-ai/Janus-Pro-1B).
+Download [ImageNet-1k](https://www.image-net.org/download.php?utm_source=chatgpt.com) for C2I training on LlamaGen, [LAION-COCO](https://laion.ai/blog/laion-coco/) for T2I training on LlamaGen. Load the [Flux-Reason](https://huggingface.co/datasets/LucasFang/FLUX-Reason-6M) dataset from HuggingFace for T2I training on Janus-Pro. Download pretrained [LlamaGen](https://huggingface.co/FoundationVision/LlamaGen/tree/main) and [Janus-Pro 1B](https://huggingface.co/deepseek-ai/Janus-Pro-1B).
 
 ## 🚀 Training
 
@@ -103,6 +105,14 @@ The evaluation environment setup can refer to [LlamaGen](https://github.com/Foun
 ```
 bash fid-eval.sh /path/to/reference_batches /path/to/output_samples
 ``` 
+
+Recommended: use a dedicated FID environment to avoid CUDA/cuDNN conflicts with training.
+```
+conda create -n fid_tf python=3.10
+conda activate fid_tf
+pip install "tensorflow[and-cuda]==2.20.0" numpy==1.26.4 scipy tqdm requests
+bash fid-eval.sh /path/to/reference_batches /path/to/output_samples
+```
 
 ### T2I Evaluation
 
